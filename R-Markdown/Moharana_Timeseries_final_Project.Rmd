@@ -1,0 +1,130 @@
+---
+title: "Time Series Project"
+author: "Suchismita Moharana"
+date: "3/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(tswge)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(naniar)
+
+```
+
+
+```{r  Reading datafile}
+###Reading datafile
+traffic_volume_raw = read.csv("../data/Metro_Interstate_Traffic_Volume.csv")
+```
+
+
+### Overview and Dataset Description
+
+The analysis here is on dataset of hourly Interstate 94 Westbound traffic volume for MN DoT ATR station 301, roughly midway between Minneapolis, MN and St Paul, MN. Hourly weather features and holidays included for impacts on traffic volume. This analysis will help in better urban planning,maintenance planning,lowering congestion level and increasing driver safety by forecasting the traffic volume for a future timeframe. 
+
+
+
+*Column Names: Datatype: Meanings*
+
+- holiday: Categorical: US National holidays plus regional holiday, Minnesota State Fair 
+- temp: Numeric: Average temp in kelvin 
+- rain_1h: Numeric: Amount in mm of rain that occurred in the hour 
+- snow_1h: Numeric: Amount in mm of snow that occurred in the hour 
+- clouds_all: Numeric: Percentage of cloud cover 
+- weather_main: Categorical: Short textual description of the current weather 
+- weather_description: Categorical: Longer textual description of the current weather 
+- date_time: DateTime: Hour of the data collected in local CST time 
+- traffic_volume: Numeric: Hourly I-94 ATR 301 reported westbound traffic volume
+
+
+
+
+
+```{r Basic EDA}
+
+#plotts.wge(traffic_volume_raw$traffic_volume)
+summary(traffic_volume_raw)
+gg_miss_var(traffic_volume_raw)
+
+##Temperature is in Kelvin. So the temperature range is 200 +
+      ggplot(traffic_volume_raw, aes(x = holiday , y = traffic_volume )) +  geom_boxplot()  + xlab("Holiday") + ylab("Traffic Volume") +  ggtitle("Holiday vs Traffic Volume") + theme(axis.text.x = element_text(angle=45,hjust=1, size=8))
+      ggplot(traffic_volume_raw, aes(x = temp , y = traffic_volume )) +  geom_point()  + xlab("Temperature") + ylab("Traffic Volume")+  ggtitle("Temperature vs Traffic Volume") + xlim(240,310)
+      ggplot(traffic_volume_raw, aes(x = rain_1h , y = traffic_volume )) +  geom_point()  + xlab("Amount of Rain in current hour") + ylab("Traffic Volume")+  ggtitle("Rain vs Traffic Volume")  + xlim(0,30)
+      ggplot(traffic_volume_raw, aes(x = snow_1h , y = traffic_volume )) +  geom_point()  + xlab("Amount of Snow in current hour") + ylab("Traffic Volume")+  ggtitle("Snow vs Traffic Volume") + xlim(0,0.1)
+      ggplot(traffic_volume_raw, aes(x = clouds_all , y = traffic_volume )) +  geom_point()  + xlab("Percentage of Cloud Cover") + ylab("Traffic Volume")+  ggtitle("Rain vs Traffic Volume")  + xlim(0,30)
+      ggplot(traffic_volume_raw, aes(x = weather_main , y = traffic_volume )) +  geom_boxplot()  + xlab("Weather") + ylab("Traffic Volume") +  ggtitle("Weather vs Traffic Volume")
+ #     ggplot(traffic_volume_raw, aes(x= fct_reorder(weather_description,traffic_volume) , y = traffic_volume )) +  geom_boxplot()  + xlab("Weather") + ylab("Traffic Volume") +  ggtitle("Weather vs Traffic Volume") + theme(axis.text.x = element_text(angle=45,hjust=1, size=8))
+
+```
+
+
+
+#### c.	Stationary / Non-Stationary 
+
+```{r Stationary / Non-Stationary }
+x=plotts.sample.wge(traffic_volume_raw$traffic_volume)
+```
+
+We see from the Spectral densities plot that there exist seasonal trend in the data. Hence, this model is non-stationary.
+
+
+#### d.	ACFs and Spectral Densities just to explore
+
+```{r ACFs and Spectral Densities}
+acf(traffic_volume_raw$traffic_volume)
+#pacf(traffic_volume_raw$traffic_volume)
+```
+
+
+
+#### e.	At least 2 candidate ARMA / ARIMA models
+
+```{r ARMA / ARIMA model}
+aic5.wge(traffic_volume_raw$traffic_volume, type = "aic")
+aic5.wge(traffic_volume_raw$traffic_volume, type = "bic")
+```
+
+
+```{r Fit model}
+fit = est.arma.wge(traffic_volume_raw$traffic_volume, p=5,q=1)
+forecast_ar5_ma1 = fore.arma.wge(traffic_volume_raw$traffic_volume, phi = c(2.07928881, -1.43001730 , 0.26322937 , 0.12631265, -0.08781127), theta=0.7772435, n.ahead = 168, plot=TRUE, lastn=TRUE)
+
+ASE = mean((traffic_volume_raw$traffic_volume[48037:48204] - forecast_ar5_ma1$f)^2)
+ASE #3737238
+
+```
+
+
+Since we did not see much significance of Weather and Cloud Cover on Traffic volume, so I will exclude them from my multivariate analysis.
+
+```{r Multivariate time series analysis}
+ksfit = lm(traffic_volume~temp+rain_1h+snow_1h, data=traffic_volume_raw)
+phi = aic.wge(ksfit$residuals , p=0:10)
+
+fit_multivariate = arima(traffic_volume_raw$traffic_volume,order=c(phi$p, 0, phi$q), xreg=traffic_volume_raw[,2:4])
+fit_multivariate
+
+
+
+acf(fit_multivariate$residuals)
+ltest = ljung.wge(fit_multivariate$residuals)
+ltest$pval
+
+
+last168 = data.frame(temp = traffic_volume_raw$temp[48037:48204], rain_1h = traffic_volume_raw$rain_1h[48037:48204], snow_1h = traffic_volume_raw$snow_1h[48037:48204])
+#get predictions
+pred_traffic = predict(fit_multivariate,newxreg = last168)
+
+
+
+ASE = mean((traffic_volume_raw$traffic_volume[48037:48204] - pred_traffic$pred)^2,na.rm = TRUE)
+ASE #9617360
+
+
+```
+
+
